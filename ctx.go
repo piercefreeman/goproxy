@@ -43,6 +43,10 @@ func (ctx *ProxyCtx) RoundTrip(req *http.Request) (*http.Response, error) {
 	if ctx.RoundTripper != nil {
 		return ctx.RoundTripper.RoundTrip(req, ctx)
 	}
+	// @pierce - addition to support client overrided roundtrip handlers
+	if ctx.Proxy.RoundTripper != nil {
+		return ctx.Proxy.RoundTripper.RoundTrip(req)
+	}
 	return ctx.Proxy.Tr.RoundTrip(req)
 }
 

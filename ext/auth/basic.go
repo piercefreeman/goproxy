@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"strings"
 
@@ -32,6 +33,7 @@ var proxyAuthorizationHeader = "Proxy-Authorization"
 
 func auth(req *http.Request, f func(user, passwd string) bool) bool {
 	authheader := strings.SplitN(req.Header.Get(proxyAuthorizationHeader), " ", 2)
+	log.Printf("Get auth header %s\n", authheader)
 	req.Header.Del(proxyAuthorizationHeader)
 	if len(authheader) != 2 || authheader[0] != "Basic" {
 		return false
@@ -44,6 +46,7 @@ func auth(req *http.Request, f func(user, passwd string) bool) bool {
 	if len(userpass) != 2 {
 		return false
 	}
+	log.Printf("Get user pass %s %s\n", userpass[0], userpass[1])
 	return f(userpass[0], userpass[1])
 }
 
@@ -72,8 +75,26 @@ func BasicConnect(realm string, f func(user, passwd string) bool) goproxy.HttpsH
 	})
 }
 
+func BasicConnectMitm(realm string, f func(user, passwd string) bool) goproxy.HttpsHandler {
+	return goproxy.FuncHttpsHandler(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+		if !auth(ctx.Req, f) {
+			log.Println("Reject auth...")
+			ctx.Resp = BasicUnauthorized(ctx.Req, realm)
+			return goproxy.RejectConnect, host
+		}
+		log.Println("Pass auth...")
+
+		return goproxy.MitmConnect, host
+	})
+}
+
 // ProxyBasic will force HTTP authentication before any request to the proxy is processed
 func ProxyBasic(proxy *goproxy.ProxyHttpServer, realm string, f func(user, passwd string) bool) {
 	proxy.OnRequest().Do(Basic(realm, f))
 	proxy.OnRequest().HandleConnect(BasicConnect(realm, f))
+}
+
+func ProxyBasicMitm(proxy *goproxy.ProxyHttpServer, realm string, f func(user, passwd string) bool) {
+	proxy.OnRequest().Do(Basic(realm, f))
+	proxy.OnRequest().HandleConnect(BasicConnectMitm(realm, f))
 }

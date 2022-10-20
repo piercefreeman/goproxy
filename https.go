@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -209,7 +210,7 @@ func (proxy *ProxyHttpServer) handleHttps(w http.ResponseWriter, r *http.Request
 			}
 		}
 		go func() {
-			//TODO: cache connections to the remote website
+			//TODO: cache connections to the remote website or use multiplexing if supported
 			rawClientTls := tls.Server(proxyClient, tlsConfig)
 			if err := rawClientTls.Handshake(); err != nil {
 				ctx.Warnf("Cannot handshake client %v %v", r.Host, err)
@@ -251,8 +252,12 @@ func (proxy *ProxyHttpServer) handleHttps(w http.ResponseWriter, r *http.Request
 					}
 					removeProxyHeaders(ctx, req)
 					resp, err = ctx.RoundTrip(req)
+					log.Printf("Response received: %s %v\n", req.URL.String(), err)
 					if err != nil {
 						ctx.Warnf("Cannot read TLS response from mitm'd server %v", err)
+						// @pierce - follow same convention as non-tls connections
+						ctx.Error = err
+						proxy.filterResponse(nil, ctx)
 						return
 					}
 					ctx.Logf("resp %v", resp.Status)

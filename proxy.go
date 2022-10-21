@@ -124,6 +124,7 @@ func (fw flushWriter) Write(p []byte) (int, error) {
 }
 
 // Standard net/http function. Shouldn't be used directly, http.Serve will use it.
+// @pierce - when used within http.Serve (as intended) it will create a new service goroutine for each execution
 func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//r.Header["X-Forwarded-For"] = w.RemoteAddr()
 	if r.Method == "CONNECT" {
@@ -140,78 +141,74 @@ func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		// @pierce - spawn handlers in separate goroutine so we can introduce locks in request and response
-		// handlers without blocking main app
-		go func() {
-			log.Println("Did spawn new go function to process...")
-			r, resp := proxy.filterRequest(r, ctx)
+		log.Println("Did spawn new go function to process...")
+		r, resp := proxy.filterRequest(r, ctx)
 
-			if resp == nil {
-				if isWebSocketRequest(r) {
-					ctx.Logf("Request looks like websocket upgrade.")
-					proxy.serveWebsocket(ctx, w, r)
-				}
-	
-				if !proxy.KeepHeader {
-					removeProxyHeaders(ctx, r)
-				}
-				resp, err = ctx.RoundTrip(r)
-				if err != nil {
-					ctx.Error = err
-					resp = proxy.filterResponse(nil, ctx)
-	
-				}
-				if resp != nil {
-					ctx.Logf("Received response %v", resp.Status)
-				}
+		if resp == nil {
+			if isWebSocketRequest(r) {
+				ctx.Logf("Request looks like websocket upgrade.")
+				proxy.serveWebsocket(ctx, w, r)
 			}
-	
-			var origBody io.ReadCloser
-	
+
+			if !proxy.KeepHeader {
+				removeProxyHeaders(ctx, r)
+			}
+			resp, err = ctx.RoundTrip(r)
+			if err != nil {
+				ctx.Error = err
+				resp = proxy.filterResponse(nil, ctx)
+
+			}
 			if resp != nil {
-				origBody = resp.Body
-				defer origBody.Close()
+				ctx.Logf("Received response %v", resp.Status)
 			}
-	
-			resp = proxy.filterResponse(resp, ctx)
-	
-			if resp == nil {
-				var errorString string
-				if ctx.Error != nil {
-					errorString = "error read response " + r.URL.Host + " : " + ctx.Error.Error()
-					ctx.Logf(errorString)
-					http.Error(w, ctx.Error.Error(), 500)
-				} else {
-					errorString = "error read response " + r.URL.Host
-					ctx.Logf(errorString)
-					http.Error(w, errorString, 500)
-				}
-				return
+		}
+
+		var origBody io.ReadCloser
+
+		if resp != nil {
+			origBody = resp.Body
+			defer origBody.Close()
+		}
+
+		resp = proxy.filterResponse(resp, ctx)
+
+		if resp == nil {
+			var errorString string
+			if ctx.Error != nil {
+				errorString = "error read response " + r.URL.Host + " : " + ctx.Error.Error()
+				ctx.Logf(errorString)
+				http.Error(w, ctx.Error.Error(), 500)
+			} else {
+				errorString = "error read response " + r.URL.Host
+				ctx.Logf(errorString)
+				http.Error(w, errorString, 500)
 			}
-			ctx.Logf("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
-			// http.ResponseWriter will take care of filling the correct response length
-			// Setting it now, might impose wrong value, contradicting the actual new
-			// body the user returned.
-			// We keep the original body to remove the header only if things changed.
-			// This will prevent problems with HEAD requests where there's no body, yet,
-			// the Content-Length header should be set.
-			if origBody != resp.Body {
-				resp.Header.Del("Content-Length")
-			}
-			copyHeaders(w.Header(), resp.Header, proxy.KeepDestinationHeaders)
-			w.WriteHeader(resp.StatusCode)
-			var copyWriter io.Writer = w
-			if w.Header().Get("content-type") == "text/event-stream" {
-				// server-side events, flush the buffered data to the client.
-				copyWriter = &flushWriter{w: w}
-			}
-	
-			nr, err := io.Copy(copyWriter, resp.Body)
-			if err := resp.Body.Close(); err != nil {
-				ctx.Warnf("Can't close response body %v", err)
-			}
-			ctx.Logf("Copied %v bytes to client error=%v", nr, err)
-		}()
+			return
+		}
+		ctx.Logf("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
+		// http.ResponseWriter will take care of filling the correct response length
+		// Setting it now, might impose wrong value, contradicting the actual new
+		// body the user returned.
+		// We keep the original body to remove the header only if things changed.
+		// This will prevent problems with HEAD requests where there's no body, yet,
+		// the Content-Length header should be set.
+		if origBody != resp.Body {
+			resp.Header.Del("Content-Length")
+		}
+		copyHeaders(w.Header(), resp.Header, proxy.KeepDestinationHeaders)
+		w.WriteHeader(resp.StatusCode)
+		var copyWriter io.Writer = w
+		if w.Header().Get("content-type") == "text/event-stream" {
+			// server-side events, flush the buffered data to the client.
+			copyWriter = &flushWriter{w: w}
+		}
+
+		nr, err := io.Copy(copyWriter, resp.Body)
+		if err := resp.Body.Close(); err != nil {
+			ctx.Warnf("Can't close response body %v", err)
+		}
+		ctx.Logf("Copied %v bytes to client error=%v", nr, err)
 	}
 }
 

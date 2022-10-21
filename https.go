@@ -159,14 +159,14 @@ func (proxy *ProxyHttpServer) handleHttps(w http.ResponseWriter, r *http.Request
 	case ConnectHTTPMitm:
 		proxyClient.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 		ctx.Logf("Assuming CONNECT is plain HTTP tunneling, mitm proxying it")
-		targetSiteCon, err := proxy.connectDial(ctx, "tcp", host)
+		/*targetSiteCon, err := proxy.connectDial(ctx, "tcp", host)
 		if err != nil {
 			ctx.Warnf("Error dialing to %s: %s", host, err.Error())
 			return
-		}
+		}*/
 		for {
 			client := bufio.NewReader(proxyClient)
-			remote := bufio.NewReader(targetSiteCon)
+			//remote := bufio.NewReader(targetSiteCon)
 			req, err := http.ReadRequest(client)
 			if err != nil && err != io.EOF {
 				ctx.Warnf("cannot read request of MITM HTTP client: %+#v", err)
@@ -176,11 +176,13 @@ func (proxy *ProxyHttpServer) handleHttps(w http.ResponseWriter, r *http.Request
 			}
 			req, resp := proxy.filterRequest(req, ctx)
 			if resp == nil {
-				if err := req.Write(targetSiteCon); err != nil {
+				// @pierce - use the same round trip handler as the https handler
+				/*if err := req.Write(targetSiteCon); err != nil {
 					httpError(proxyClient, ctx, err)
 					return
 				}
-				resp, err = http.ReadResponse(remote, req)
+				resp, err = http.ReadResponse(remote, req)*/
+				resp, err = ctx.RoundTrip(req)
 				if err != nil {
 					httpError(proxyClient, ctx, err)
 					return
